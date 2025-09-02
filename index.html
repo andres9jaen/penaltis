@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>Penaltis – Versión Móvil</title>
+<style>
+  :root{
+    --bg:#0b0e19;
+    --ui:rgba(0,0,0,.55);
+    --ok:#22c55e;
+    --warn:#f59e0b;
+    --err:#ef4444;
+    --accent:#60a5fa;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);font-family:system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial}
+  #app{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:var(--bg);}
+  canvas{touch-action:none; display:block; width:100vw; height:100vh;}
+  .hud{
+    position:fixed; top:0; left:0; right:0; padding:env(safe-area-inset-top) 12px 12px;
+    display:flex; justify-content:space-between; align-items:center; pointer-events:none;
+  }
+  .chip{pointer-events:auto; background:var(--ui); color:#fff; padding:8px 12px; border-radius:999px; font-weight:600; font-size:14px; backdrop-filter: blur(6px); }
+  .row{display:flex; gap:8px; align-items:center;}
+  .btn{pointer-events:auto; border:0; border-radius:12px; padding:10px 12px; background:var(--accent); color:#001; font-weight:700;}
+  .hint{position:fixed; left:50%; transform:translateX(-50%); bottom:72px; color:#cfe; background:var(--ui); padding:8px 12px; border-radius:999px; font-size:14px; backdrop-filter: blur(6px); }
+  .orientation{
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.75); color:#fff; text-align:center; padding:24px;
+  }
+  .orientation.show{display:flex;}
+  .result{
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.85); color:#fff;
+    flex-direction:column; gap:16px; padding:24px; text-align:center;
+  }
+  .result.show{display:flex;}
+  .result img{max-width:80vw; max-height:45vh; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.45);}
+  .result h2{margin:0; font-size:24px;}
+  .result p{margin:0; opacity:.9}
+  .result .actions{display:flex; gap:12px; margin-top:6px;}
+  .result .actions .btn{background:#fff;}
+  .aimTip{
+    position:fixed; top:48px; left:50%; transform:translateX(-50%);
+    color:#9fd; background:var(--ui); padding:6px 10px; border-radius:999px; font-size:12px; display:none;
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+  </div>
+
+  <div class="hud">
+    <div class="row">
+      <div class="chip" id="score">⚽️ 0</div>
+      <div class="chip" id="attempts">Tiros: 0/5</div>
+    </div>
+    <div class="row">
+      <button class="btn" id="resetBtn" aria-label="Reiniciar">Reiniciar</button>
+    </div>
+  </div>
+
+  <div class="hint" id="hint">Desliza desde la pelota para chutar</div>
+  <div class="aimTip" id="aimTip">↑ Dirección y potencia</div>
+
+  <div class="orientation" id="orientation">
+    <div>
+      <h2>Gira el móvil a <u>vertical</u></h2>
+      <p>Este juego está optimizado para modo retrato.</p>
+    </div>
+  </div>
+
+  <div class="result" id="result">
+    <img id="resultImg" alt="Celebración" />
+    <h2 id="resultTitle">¡GOOOOL!</h2>
+    <p id="resultMsg">¡Qué misil!</p>
+    <div class="actions">
+      <button class="btn" id="playAgain">Jugar de nuevo</button>
+      <button class="btn" id="shareBtn">Compartir</button>
+    </div>
+  </div>
+
+<script>
+(function(){
+  // ---- Parámetros ----
+  const params = new URLSearchParams(location.search);
+  const GAME_OPTS = {
+    attemptsMax: 5,
+    goalkeeperSpeed: parseFloat(params.get("gkSpeed")) || 1.0,
+    shotPowerScale: 0.012,
+    shotMaxSpeed: 28,
+    curlFactor: 0.00045,
+    showGuide: true,
+    fieldColorTop: "#0f1730",
+    fieldColorBottom: "#0a1326"
+  };
+
+  // ---- Canvas & DPI scaling ----
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  function resize(){
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width = "100vw";
+    canvas.style.height = "100vh";
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener("resize", resize, {passive:true});
+  resize();
+
+  // ---- Carga imágenes ----
+  function loadImage(src){
+    return new Promise(res=>{
+      const img = new Image();
+      img.onload = ()=>res(img);
+      img.onerror = ()=>res(null);
+      img.src = src;
+    });
+  }
+  const assets = { goalkeeper:null, ball:null, net:null, celebration:null, logo:null };
+  Promise.all([
+    loadImage("images/portera.png"),
+    loadImage("images/pelota.png"),
+    loadImage("images/fondo_porteria.png"),
+    loadImage("images/celebracion.png"),
+    loadImage("images/logo.png")
+  ]).then(([gk, ball, net, celeb, logo])=>{
+    assets.goalkeeper = gk;
+    assets.ball = ball;
+    assets.net = net;
+    assets.celebration = celeb;
+    assets.logo = logo;
+  });
+
+  // ---- Estado ----
+  const state = {
+    score: 0,
+    attempts: 0,
+    phase: "aim", // "aim" | "flying" | "result"
+    w: ()=>canvas.clientWidth,
+    h: ()=>canvas.clientHeight,
+    goal: { x:0, y:0, w:0, h:0, post:0 },
+    gk: { x:0, y:0, w:0, h:0, dir:1, vx: 120*GAME_OPTS.goalkeeperSpeed },
+    ball: { x:0, y:0, r:0, vx:0, vy:0, spin:0 },
+    swipe: { active:false, path:[], start:null, end:null },
+    lastTime: performance.now()
+  };
+
+  function layout(){
+    const W = state.w(), H = state.h();
+    const goalW = W*0.84, goalH = H*0.22;
+    state.goal.w = goalW;
+    state.goal.h = goalH;
+    state.goal.x = (W - goalW)/2;
+    state.goal.y = H*0.10;
+    state.goal.post = Math.max(6, Math.min(14, Math.floor(W*0.012)));
+
+    const gkW = goalW*0.22, gkH = goalH*0.85;
+    state.gk.w = gkW; state.gk.h = gkH;
+    state.gk.y = state.goal.y + (goalH - gkH)/2;
+    if(!state.gk.x){ state.gk.x = state.goal.x + (goalW - gkW)/2; }
+
+    const ballR = Math.max(18, Math.min(28, Math.floor(W*0.035)));
+    state.ball.r = ballR;
+    state.ball.x = W/2;
+    if(state.phase==="aim" || state.phase==="result"){
+      state.ball.y = H - ballR - 24;
+      state.ball.vx = 0; state.ball.vy = 0; state.ball.spin = 0;
+    }
+  }
+  layout();
+  window.addEventListener("resize", layout, {passive:true});
+
+  // ---- UI ----
+  const elScore = document.getElementById("score");
+  const elAttempts = document.getElementById("attempts");
+  const elHint = document.getElementById("hint");
+  const elAimTip = document.getElementById("aimTip");
+  const elOrientation = document.getElementById("orientation");
+  const elResult = document.getElementById("result");
+  const elResultImg = document.getElementById("resultImg");
+  const elResultTitle = document.getElementById("resultTitle");
+  const elResultMsg = document.getElementById("resultMsg");
+  const elReset = document.getElementById("resetBtn");
+  const elAgain = document.getElementById("playAgain");
+  const elShare = document.getElementById("shareBtn");
+
+  elReset.addEventListener("click", resetGame);
+  elAgain.addEventListener("click", ()=>{ hideResult(); nextAttempt(true); });
+  elShare.addEventListener("click", async ()=>{
+    const text = `He marcado un gol 🎯 (${state.score}/${GAME_OPTS.attemptsMax}). ¿Te atreves?`;
+    const url = location.href.split("#")[0];
+    if(navigator.share){
+      try{ await navigator.share({title:document.title, text, url}); }catch(e){}
+    }else{
+      prompt("Copia y comparte la URL:", url);
+    }
+  });
+
+  function updateHUD(){
+    elScore.textContent = `⚽️ ${state.score}`;
+    elAttempts.textContent = `Tiros: ${state.attempts}/${GAME_OPTS.attemptsMax}`;
+  }
+  function resetGame(){
+    state.score = 0;
+    state.attempts = 0;
+    state.phase = "aim";
+    state.gk.x = 0;
+    layout();
+    updateHUD();
+    elHint.style.display = "block";
+    hideResult(true);
+  }
+  resetGame();
+
+  // ---- Orientación ----
+  function checkOrientation(){
+    const portrait = window.matchMedia("(orientation: portrait)").matches;
+    elOrientation.classList.toggle("show", !portrait);
+  }
+  checkOrientation();
+  window.addEventListener("orientationchange", checkOrientation);
+
+  // ---- Input ----
+  canvas.addEventListener("touchstart", onStart, {passive:false});
+  canvas.addEventListener("touchmove", onMove, {passive:false});
+  canvas.addEventListener("touchend", onEnd, {passive:false});
+  canvas.addEventListener("mousedown", onMouseStart);
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("mouseup", onMouseEnd);
+
+  function getPos(e){
+    const t = (e.touches && e.touches[0]) || e;
+    const rect = canvas.getBoundingClientRect();
+    return {x: t.clientX - rect.left, y: t.clientY - rect.top};
+  }
+  function onStart(e){
+    if(state.phase!=="aim") return;
+    e.preventDefault();
+    const p = getPos(e);
+    const dx = p.x - state.ball.x;
+    const dy = p.y - state.ball.y;
+    if(Math.hypot(dx,dy) > state.ball.r*2.2) return;
+    state.swipe.active = true;
+    state.swipe.path = [p];
+    state.swipe.start = p;
+    state.swipe.end = null;
+    elAimTip.style.display = "block";
+    elHint.style.display = "none";
+  }
+  function onMove(e){
+    if(!state.swipe.active) return;
+    e.preventDefault();
+    const p = getPos(e);
+    state.swipe.path.push(p);
+    state.swipe.end = p;
+  }
+  function onEnd(e){
+    if(!state.swipe.active) return;
+    e.preventDefault();
+    shootFromSwipe();
+  }
+  let mouseDown=false;
+  function onMouseStart(e){ mouseDown=true; onStart(e); }
+  function onMouseMove(e){ if(mouseDown) onMove(e); }
+  function onMouseEnd(e){ if(mouseDown){ mouseDown=false; onEnd(e); } }
+
+  function shootFromSwipe(){
+    elAimTip.style.display = "none";
+    state.swipe.active = false;
+    if(!state.swipe.start || !state.swipe.end){ return; }
+    const dx = state.swipe.end.x - state.swipe.start.x;
+    const dy = state.swipe.end.y - state.swipe.start.y;
+    let vx = dx * GAME_OPTS.shotPowerScale;
+    let vy = (dy) * GAME_OPTS.shotPowerScale;
+    if(vy > -1){ vy = -1; }
+    const sp = Math.hypot(vx, vy);
+    if(sp > GAME_OPTS.shotMaxSpeed){
+      const k = GAME_OPTS.shotMaxSpeed / sp;
+      vx *= k; vy *= k;
+    }
+    const curl = estimateCurl(state.swipe.path);
+    state.ball.vx = vx + curl*8;
+    state.ball.vy = vy;
+    state.ball.spin = curl*0.18;
+    state.phase = "flying";
+    state.attempts++;
+    updateHUD();
+  }
+  function estimateCurl(path){
+    if(!path || path.length<4) return 0;
+    const s = path[0], e = path[path.length-1];
+    const ax = e.x - s.x, ay = e.y - s.y;
+    const len = Math.hypot(ax, ay) || 1;
+    const nx = -ay/len, ny = ax/len;
+    let sideSum = 0;
+    for(const p of path){
+      const px = p.x - s.x, py = p.y - s.y;
+      sideSum += (px*nx + py*ny);
+    }
+    return Math.max(-1, Math.min(1, sideSum / (path.length*120))) * (ay<0 ? 1 : 0);
+  }
+
+  function rectsOverlap(ax,ay,aw,ah,bx,by,bw,bh){
+    return ax<bx+bw && ax+aw>bx && ay<by+bh && ay+ah>by;
+  }
+
+  // ---- Bucle ----
+  function tick(ts){
+    const dt = Math.min(0.033, (ts - state.lastTime)/1000);
+    state.lastTime = ts;
+    update(dt);
+    draw();
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  function update(dt){
+    // Portera
+    const gxMin = state.goal.x + state.goal.post;
+    const gxMax = state.goal.x + state.goal.w - state.goal.post - state.gk.w;
+    state.gk.x += state.gk.vx * dt * state.gk.dir;
+    if(state.gk.x <= gxMin){ state.gk.x = gxMin; state.gk.dir = 1; }
+    if(state.gk.x >= gxMax){ state.gk.x = gxMax; state.gk.dir = -1; }
+
+    if(state.phase==="flying"){
+      state.ball.vx += state.ball.spin;
+      state.ball.x += state.ball.vx;
+      state.ball.y += state.ball.vy;
+
+      const br = state.ball.r;
+      if(rectsOverlap(
+        state.ball.x - br, state.ball.y - br, br*2, br*2,
+        state.gk.x, state.gk.y, state.gk.w, state.gk.h
+      )){
+        showResult(false);
+      }
+
+      const insideX = state.ball.x > (state.goal.x + state.goal.post + br*0.3) &&
+                      state.ball.x < (state.goal.x + state.goal.w - state.goal.post - br*0.3);
+      const crossedY = (state.ball.y + br) < (state.goal.y + state.goal.h - br*0.2);
+      if(insideX && crossedY){
+        showResult(true);
+      }
+
+      const outTop = (state.ball.y + br) < 0;
+      const outSides = (state.ball.x < -br || state.ball.x > state.w()+br);
+      if(outTop || outSides){
+        showResult(false);
+      }
+    }
+  }
+
+  function draw(){
+    const W = state.w(), H = state.h();
+
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, GAME_OPTS.fieldColorTop);
+    g.addColorStop(1, GAME_OPTS.fieldColorBottom);
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    if(assets.net){
+      ctx.drawImage(assets.net, state.goal.x, state.goal.y, state.goal.w, state.goal.h);
+    } else {
+      ctx.fillStyle = "#0a1a33";
+      ctx.fillRect(state.goal.x, state.goal.y, state.goal.w, state.goal.h);
+      ctx.fillStyle = "#e9eef9";
+      ctx.fillRect(state.goal.x, state.goal.y, state.goal.post, state.goal.h);
+      ctx.fillRect(state.goal.x + state.goal.w - state.goal.post, state.goal.y, state.goal.post, state.goal.h);
+      ctx.fillRect(state.goal.x, state.goal.y, state.goal.w, Math.max(6,state.goal.post*0.8));
+    }
+
+    if(assets.goalkeeper){
+      ctx.drawImage(assets.goalkeeper, state.gk.x, state.gk.y, state.gk.w, state.gk.h);
+    } else {
+      ctx.fillStyle = "#ffd166";
+      ctx.fillRect(state.gk.x, state.gk.y, state.gk.w, state.gk.h);
+      ctx.fillStyle = "#333";
+      ctx.fillText("PORTERA", state.gk.x+10, state.gk.y+20);
+    }
+
+    if(state.swipe.active && state.swipe.start){
+      const s = state.swipe.start;
+      const e = state.swipe.end || s;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(255,255,255,.8)";
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(e.x, e.y);
+      ctx.stroke();
+
+      if(GAME_OPTS.showGuide){
+        const dx = e.x - s.x, dy = e.y - s.y;
+        const ang = Math.atan2(dy, dx);
+        const len = Math.min(120, Math.hypot(dx,dy));
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        ctx.rotate(ang);
+        ctx.fillStyle = "rgba(255,255,255,.9)";
+        ctx.beginPath();
+        ctx.moveTo(0,0);
+        ctx.lineTo(len,0);
+        ctx.lineTo(len-12,6);
+        ctx.lineTo(len-12,-6);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    if(assets.ball){
+      ctx.drawImage(assets.ball, state.ball.x - state.ball.r, state.ball.y - state.ball.r, state.ball.r*2, state.ball.r*2);
+    } else {
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(state.ball.x, state.ball.y, state.ball.r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = "#ddd"; ctx.stroke();
+    }
+
+    ctx.fillStyle = "rgba(255,255,255,.15)";
+    ctx.beginPath();
+    ctx.arc(W/2, H*0.70, 4, 0, Math.PI*2);
+    ctx.fill();
+
+    if(assets.logo){
+      const lw = Math.min(110, W*0.25);
+      const lh = lw*0.35;
+      ctx.globalAlpha = .65;
+      ctx.drawImage(assets.logo, W - lw - 12, 12 + 8, lw, lh);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function nextAttempt(resetBall){
+    if(state.attempts >= GAME_OPTS.attemptsMax){
+      state.attempts = 0;
+      state.score = 0;
+    }
+    state.phase = "aim";
+    if(resetBall) layout();
+    elHint.style.display = "block";
+  }
+
+  // ---- Mensajes personalizados ----
+  const GOL_TITULO = "GOOOOOL!!!!";
+  const GOL_MENSAJE = "REGALO CONSEGUIDO.";
+  const PARADA_TITULO = "❌";
+  const PARADA_MENSAJE = "LUCIIAAAAAQA QUITA EL WIFIIIIIII!!!!";
+
+  function showResult(goal){
+    state.phase = "result";
+    if(goal) state.score++;
+    updateHUD();
+
+    if (goal) {
+      elResultTitle.textContent = GOL_TITULO;
+      elResultMsg.textContent = GOL_MENSAJE;
+      if(assets.celebration){
+        elResultImg.src = assets.celebration.src || "images/celebracion.png";
+        elResultImg.style.display = "block";
+      } else {
+        elResultImg.style.display = "none";
+      }
+    } else {
+      elResultTitle.textContent = PARADA_TITULO;
+      elResultMsg.textContent = PARADA_MENSAJE;
+      elResultImg.style.display = "none";
+    }
+
+    // Dificultad dinámica leve
+    const racha = Math.max(0, Math.min(3, state.score));
+    state.gk.vx = 120 * GAME_OPTS.goalkeeperSpeed * (1 + racha*0.12);
+
+    elResult.classList.add("show");
+  }
+  function hideResult(silent){
+    elResult.classList.remove("show");
+    if(!silent) setTimeout(()=>{ nextAttempt(true); }, 120);
+  }
+
+  setTimeout(()=>{ elHint.style.display = "none"; }, 3000);
+})();
+</script>
+</body>
+</html>
