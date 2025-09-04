@@ -118,14 +118,17 @@
       img.src = src;
     });
   }
-  const assets = { goalkeeper:null, ball:null, net:null, celebration:null, logo:null };
+  // ➕ añadido: background
+  const assets = { background:null, goalkeeper:null, ball:null, net:null, celebration:null, logo:null };
   Promise.all([
+    loadImage("images/fondo.jpg"),            // 👈 fondo personalizado (opcional)
     loadImage("images/portera.png"),
     loadImage("images/pelota.png"),
     loadImage("images/fondo_porteria.png"),
     loadImage("images/celebracion.png"),
     loadImage("images/logo.png")
-  ]).then(([gk, ball, net, celeb, logo])=>{
+  ]).then(([bg, gk, ball, net, celeb, logo])=>{
+    assets.background = bg;
     assets.goalkeeper = gk;
     assets.ball = ball;
     assets.net = net;
@@ -223,6 +226,8 @@
   window.addEventListener("orientationchange", checkOrientation);
 
   // ---- Input ----
+  const elAimTip = document.getElementById("aimTip");
+  const elHint = document.getElementById("hint");
   canvas.addEventListener("touchstart", onStart, {passive:false});
   canvas.addEventListener("touchmove", onMove, {passive:false});
   canvas.addEventListener("touchend", onEnd, {passive:false});
@@ -355,11 +360,16 @@
   function draw(){
     const W = state.w(), H = state.h();
 
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, GAME_OPTS.fieldColorTop);
-    g.addColorStop(1, GAME_OPTS.fieldColorBottom);
-    ctx.fillStyle = g;
-    ctx.fillRect(0,0,W,H);
+    // 👇 Fondo personalizado si existe; si no, degradado original
+    if (assets.background) {
+      ctx.drawImage(assets.background, 0, 0, W, H);
+    } else {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, GAME_OPTS.fieldColorTop);
+      g.addColorStop(1, GAME_OPTS.fieldColorBottom);
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,W,H);
+    }
 
     if(assets.net){
       ctx.drawImage(assets.net, state.goal.x, state.goal.y, state.goal.w, state.goal.h);
