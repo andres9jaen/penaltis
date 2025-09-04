@@ -118,10 +118,10 @@
       img.src = src;
     });
   }
-  // ➕ añadido: background
+  // Añadimos fondo personalizado sin romper nada más
   const assets = { background:null, goalkeeper:null, ball:null, net:null, celebration:null, logo:null };
   Promise.all([
-    loadImage("images/fondo.jpg"),            // 👈 fondo personalizado (opcional)
+    loadImage("images/fondo.jpg"),            // ← fondo (opcional)
     loadImage("images/portera.png"),
     loadImage("images/pelota.png"),
     loadImage("images/fondo_porteria.png"),
@@ -226,8 +226,6 @@
   window.addEventListener("orientationchange", checkOrientation);
 
   // ---- Input ----
-  const elAimTip = document.getElementById("aimTip");
-  const elHint = document.getElementById("hint");
   canvas.addEventListener("touchstart", onStart, {passive:false});
   canvas.addEventListener("touchmove", onMove, {passive:false});
   canvas.addEventListener("touchend", onEnd, {passive:false});
@@ -360,7 +358,7 @@
   function draw(){
     const W = state.w(), H = state.h();
 
-    // 👇 Fondo personalizado si existe; si no, degradado original
+    // Fondo personalizado si existe; si no, degradado original
     if (assets.background) {
       ctx.drawImage(assets.background, 0, 0, W, H);
     } else {
